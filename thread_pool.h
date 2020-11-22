@@ -101,7 +101,7 @@ void thread_pool::start() {
     }
 
     std::thread thread(&thread_pool::run, this);
-    thread_map_[thread.get_id()] = std::move(thread);
+    thread_map_.emplace(thread.get_id(), std::move(thread));
     is_stop_ = false;
 }
 
@@ -170,7 +170,7 @@ void thread_pool::run() {
             if (!is_stop_ 
                     && thread_map_.size() < permanent_thread_size_ + dynamic_thread_size_) {
                 std::thread thread(&thread_pool::run, this);
-                thread_map_[thread.get_id()] = std::move(thread);
+                thread_map_.emplace(thread.get_id(), std::move(thread));
             }
         }
 
