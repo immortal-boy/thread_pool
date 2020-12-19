@@ -37,6 +37,11 @@ namespace utility {
 
 class thread_pool {
 public:
+    enum class launch {
+        dispatch, 
+        post, 
+    };
+
     thread_pool();
     ~thread_pool();
 
@@ -46,6 +51,10 @@ public:
     template <class Function, class... Args>
     std::future<typename std::result_of<Function(Args...)>::type>
     async(Function&& f, Args&&... args);
+
+    template <class Function, class... Args>
+    std::future<typename std::result_of<Function(Args...)>::type>
+    async(launch policy, Function&& f, Args&&... args);
 
     void start();
     void stop();
@@ -125,23 +134,40 @@ void thread_pool::stop() {
 template <class Function, class... Args>
 std::future<typename std::result_of<Function(Args...)>::type>
 thread_pool::async(Function&& f, Args&&... args) {
-    auto task = std::make_shared<std::packaged_task<typename std::result_of<Function(Args...)>::type()> >(std::bind(f, args...));
-    auto future = task->get_future();
-    std::unique_lock<std::mutex> lock(task_list_mutex_);
-    while (!is_stop_
-            && !produce_task_cv_.wait_for(lock, 
-                                          std::chrono::seconds(1), 
-                                          [this]() {
-                                              return task_list_.size() < max_task_size_;
-                                          }));
+    return async(launch::dispatch, f, args...);
+}
 
-    if (!is_stop_) {
-        task_list_.emplace_back([task]() {
-                                    (*task)();
-                                }); 
-        consume_task_cv_.notify_one();
+template <class Function, class... Args>
+std::future<typename std::result_of<Function(Args...)>::type>
+thread_pool::async(thread_pool::launch policy, Function&& f, Args&&... args) {
+    bool execute_directly = false;
+    if (thread_pool::launch::dispatch == policy) {
+        std::lock_guard<std::mutex> lock(thread_map_mutex_);
+        execute_directly = thread_map_.end() != thread_map_.find(std::this_thread::get_id()); 
     }
-    return future;
+    
+    auto task = std::make_shared<std::packaged_task<typename std::result_of<Function(Args...)>::type()> >(std::bind(f, args...));
+
+    if (execute_directly) {
+        (*task)();
+    } else {
+        std::unique_lock<std::mutex> lock(task_list_mutex_);
+        while (!is_stop_
+                && !produce_task_cv_.wait_for(lock, 
+                                              std::chrono::seconds(1), 
+                                              [this]() {
+                                                  return task_list_.size() < max_task_size_;
+                                              }));
+
+        if (!is_stop_) {
+            task_list_.emplace_back([task]() {
+                                        (*task)();
+                                    }); 
+            consume_task_cv_.notify_one();
+        }
+    }
+
+    return task->get_future(); 
 }
 
 void thread_pool::run() {
